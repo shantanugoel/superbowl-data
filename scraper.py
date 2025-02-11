@@ -87,33 +87,38 @@ class SuperBowlAdScraper:
             return brand, title
             
         # Format 3: <Year> <Brand> - <Ad title>
-        pattern3 = rf'^\s*{year}\s+(.+?)\s*[-–]\s*(.+)$'
-        match = re.match(pattern3, text)
-        if match:
-            brand = match.group(1).strip()
-            title = match.group(2).strip()
-            return brand, title
+        # Process from the end to preserve hyphens in brand names
+        if text.startswith(year):
+            # Find the last hyphen in the string
+            for separator in [' – ', ' - ']:  # Try em-dash first, then regular hyphen
+                last_sep_idx = text.rfind(separator)
+                if last_sep_idx != -1:
+                    # Everything after the last hyphen is the title
+                    title = text[last_sep_idx + len(separator):].strip()
+                    # Everything between year and the last hyphen is the brand
+                    brand_part = text[len(year):last_sep_idx].strip()
+                    if brand_part and title:
+                        return brand_part, title
             
-        # If no pattern matches, try splitting on common separators
-        for separator in [' Ad -', ' Ad –', ' - ', ' – ']:
-            if separator in text:
-                parts = text.split(separator)
-                if len(parts) >= 2:
-                    brand_part = parts[0].strip()
-                    title = parts[-1].strip()
-                    
-                    # Remove Super Bowl and variations from brand part
-                    brand_part = re.sub(r'\b(?:Super\s*Bowl|SB|Bowl)\s*(?:[IVXLC]+|\d+)?\b', '', brand_part, flags=re.IGNORECASE)
-                    # Remove year from brand part
-                    brand_part = re.sub(rf'\b{year}\b', '', brand_part, flags=re.IGNORECASE)
-                    # Remove "Ad" or "Commercial" from brand part
-                    brand_part = re.sub(r'\b(?:Ad|Commercial)\b', '', brand_part, flags=re.IGNORECASE)
-                    
-                    # Clean up brand part while preserving hyphens in brand names
-                    brand = ' '.join(brand_part.split())
-                    
-                    if brand and title:
-                        return brand, title
+        # If no pattern matches, try splitting from the end on common separators
+        for separator in [' Ad – ', ' Ad - ', ' – ', ' - ']:
+            last_sep_idx = text.rfind(separator)
+            if last_sep_idx != -1:
+                brand_part = text[:last_sep_idx].strip()
+                title = text[last_sep_idx + len(separator):].strip()
+                
+                # Remove Super Bowl and variations from brand part
+                brand_part = re.sub(r'\b(?:Super\s*Bowl|SB|Bowl)\s*(?:[IVXLC]+|\d+)?\b', '', brand_part, flags=re.IGNORECASE)
+                # Remove year from brand part
+                brand_part = re.sub(rf'\b{year}\b', '', brand_part, flags=re.IGNORECASE)
+                # Remove "Ad" or "Commercial" from brand part
+                brand_part = re.sub(r'\b(?:Ad|Commercial)\b', '', brand_part, flags=re.IGNORECASE)
+                
+                # Clean up brand part while preserving hyphens in brand names
+                brand = ' '.join(brand_part.split())
+                
+                if brand and title:
+                    return brand, title
         
         return None, None
 
