@@ -4,6 +4,7 @@ import time
 from typing import Dict, Any
 import os
 from tqdm import tqdm
+import argparse
 
 # Configure Gemini API
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
@@ -93,39 +94,85 @@ def process_with_gemini(ad_data: Dict[str, Any]) -> Dict[str, Any]:
                 }
             time.sleep(2 ** attempt)  # Exponential backoff
 
-def enhance_data(input_file: str = 'superbowl_ads.json', output_file: str = 'enhanced_superbowl_ads.json'):
-    """Enhance the scraped data with Gemini-generated insights."""
-    # Load the original data
-    with open(input_file, 'r', encoding='utf-8') as f:
-        ads_data = json.load(f)
+def needs_update(ad: Dict[str, Any]) -> bool:
+    """Check if an ad needs to be updated."""
+    # Check if description is empty or very short
+    if not ad.get('description') or len(ad['description'].strip()) < 10:
+        return True
     
-    # Process each ad with Gemini
-    enhanced_data = []
-    for ad in tqdm(ads_data, desc="Processing ads"):
-        gemini_insights = process_with_gemini(ad)
+    # Check if any theme tags are Unknown
+    if 'theme_tags' not in ad or 'Unknown' in ad['theme_tags']:
+        return True
+    
+    # Check if category is Other or missing
+    if 'category' not in ad or ad['category'] == 'Other':
+        return True
+    
+    return False
+
+def enhance_data(input_file: str = 'superbowl_ads.json', output_file: str = 'enhanced_superbowl_ads.json', update_missing: bool = False):
+    """Enhance the scraped data with Gemini-generated insights."""
+    # Load the data
+    if update_missing and os.path.exists(output_file):
+        print(f"Loading existing enhanced data from {output_file}")
+        with open(output_file, 'r', encoding='utf-8') as f:
+            ads_data = json.load(f)
         
-        # Create enhanced ad data
-        enhanced_ad = ad.copy()
-        enhanced_ad.update({
-            'description': gemini_insights['summary'],
-            'category': gemini_insights['category'],
-            'theme_tags': gemini_insights['theme_tags']
-        })
-        enhanced_data.append(enhanced_ad)
+        # Filter ads that need updating
+        ads_to_update = [i for i, ad in enumerate(ads_data) if needs_update(ad)]
+        if not ads_to_update:
+            print("No ads need updating.")
+            return
         
-        # Be nice to the API
-        time.sleep(1)
+        print(f"Found {len(ads_to_update)} ads that need updating")
+        
+        # Process only ads that need updating
+        for idx in tqdm(ads_to_update, desc="Processing ads"):
+            gemini_insights = process_with_gemini(ads_data[idx])
+            
+            # Update the existing ad data
+            ads_data[idx].update({
+                'description': gemini_insights['summary'],
+                'category': gemini_insights['category'],
+                'theme_tags': gemini_insights['theme_tags']
+            })
+            
+            # Be nice to the API
+            time.sleep(1)
+    else:
+        # Load original data for full processing
+        with open(input_file, 'r', encoding='utf-8') as f:
+            ads_data = json.load(f)
+        
+        # Process each ad with Gemini
+        enhanced_data = []
+        for ad in tqdm(ads_data, desc="Processing ads"):
+            gemini_insights = process_with_gemini(ad)
+            
+            # Create enhanced ad data
+            enhanced_ad = ad.copy()
+            enhanced_ad.update({
+                'description': gemini_insights['summary'],
+                'category': gemini_insights['category'],
+                'theme_tags': gemini_insights['theme_tags']
+            })
+            enhanced_data.append(enhanced_ad)
+            
+            # Be nice to the API
+            time.sleep(1)
+        
+        ads_data = enhanced_data
     
     # Save enhanced data
     with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(enhanced_data, f, indent=2, ensure_ascii=False)
+        json.dump(ads_data, f, indent=2, ensure_ascii=False)
     
-    print(f"\nProcessed {len(enhanced_data)} ads and saved to {output_file}")
+    print(f"\nProcessed ads and saved to {output_file}")
     
     # Print some statistics
     categories = {}
     tags = {}
-    for ad in enhanced_data:
+    for ad in ads_data:
         categories[ad['category']] = categories.get(ad['category'], 0) + 1
         for tag in ad['theme_tags']:
             tags[tag] = tags.get(tag, 0) + 1
@@ -139,4 +186,8 @@ def enhance_data(input_file: str = 'superbowl_ads.json', output_file: str = 'enh
         print(f"{tag}: {count}")
 
 if __name__ == "__main__":
-    enhance_data() 
+    parser = argparse.ArgumentParser(description='Enhance Super Bowl ads data using Gemini API')
+    parser.add_argument('--missing', action='store_true', help='Update only ads with missing or unknown data')
+    args = parser.parse_args()
+    
+    enhance_data(update_missing=args.missing) 
