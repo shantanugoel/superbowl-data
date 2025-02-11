@@ -1,15 +1,24 @@
 import json
 import pandas as pd
-import numpy as np
+import re
 from typing import List, Dict, Any
+
+def clean_column_name(name: str) -> str:
+    """
+    Convert theme names to Excel-friendly column names.
+    Removes special characters and spaces, ensures valid Excel column names.
+    """
+    # Remove special characters and spaces, replace with underscore
+    clean = re.sub(r'[^a-zA-Z0-9]', '_', name)
+    # Remove consecutive underscores
+    clean = re.sub(r'_+', '_', clean)
+    # Remove trailing underscores
+    clean = clean.strip('_')
+    return clean
 
 def convert_json_to_excel(input_file: str, output_file: str) -> None:
     """
     Convert SuperBowl ads JSON data to Excel format with optimized theme_tags handling for pivot analysis.
-    
-    Args:
-        input_file: Path to input JSON file
-        output_file: Path to output Excel file
     """
     # Read JSON data
     with open(input_file, 'r', encoding='utf-8') as f:
@@ -20,61 +29,63 @@ def convert_json_to_excel(input_file: str, output_file: str) -> None:
     
     # Create the main sheet data
     main_df = df.copy()
-    main_df['theme_tags'] = main_df['theme_tags'].apply(lambda x: ' | '.join(x) if x else '')
     
-    # Reorder columns for better readability
-    main_columns = [
+    # Get all unique themes
+    all_themes = set()
+    for themes in df['theme_tags']:
+        if themes:  # Check if themes is not None
+            all_themes.update(themes)
+    
+    # Sort themes for consistency
+    sorted_themes = sorted(all_themes)
+    
+    # Create binary columns for each theme
+    for theme in sorted_themes:
+        clean_theme_name = f"Theme_{clean_column_name(theme)}"
+        main_df[clean_theme_name] = main_df['theme_tags'].apply(
+            lambda x: 1 if theme in (x or []) else 0
+        )
+    
+    # Convert theme_tags array to string for display
+    main_df['theme_tags_display'] = main_df['theme_tags'].apply(lambda x: ' | '.join(x) if x else '')
+    
+    # Organize columns
+    theme_columns = [f"Theme_{clean_column_name(theme)}" for theme in sorted_themes]
+    base_columns = [
         'year',
         'brand',
         'title',
         'category',
-        'theme_tags',
+        'theme_tags_display',
         'description',
         'page_url',
         'video_url',
         'original_title'
     ]
-    main_df = main_df[main_columns]
     
-    # Create theme analysis data
-    # First, get all unique themes
-    all_themes = set()
-    for themes in df['theme_tags']:
-        all_themes.update(themes)
+    # Combine all columns
+    all_columns = base_columns + theme_columns
+    main_df = main_df[all_columns]
     
-    # Create binary columns for each theme
-    theme_df = df.copy()
-    for theme in sorted(all_themes):
-        theme_df[f'Theme_{theme}'] = theme_df['theme_tags'].apply(
-            lambda x: 1 if theme in x else 0
-        )
+    # Create theme summary data
+    theme_summary = pd.DataFrame({
+        'Theme': sorted_themes,
+        'Count': [main_df[f"Theme_{clean_column_name(theme)}"].sum() for theme in sorted_themes]
+    })
+    theme_summary = theme_summary.sort_values('Count', ascending=False)
     
-    # Prepare theme analysis columns
-    theme_columns = ['year', 'brand', 'title', 'category'] + [f'Theme_{theme}' for theme in sorted(all_themes)]
-    theme_df = theme_df[theme_columns]
-    
-    # Write to Excel with multiple sheets
+    # Write to Excel
     with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
         # Write main data
         main_df.to_excel(writer, index=False, sheet_name='SuperBowl Ads')
         
-        # Write theme analysis data
-        theme_df.to_excel(writer, index=False, sheet_name='Theme Analysis')
-        
-        # Create theme summary
-        theme_summary = pd.DataFrame({
-            'Theme': sorted(all_themes),
-            'Count': [theme_df[f'Theme_{theme}'].sum() for theme in sorted(all_themes)]
-        })
-        theme_summary = theme_summary.sort_values('Count', ascending=False)
+        # Write theme summary
         theme_summary.to_excel(writer, index=False, sheet_name='Theme Summary')
         
         # Auto-adjust column widths for all sheets
         for sheet_name in writer.sheets:
             worksheet = writer.sheets[sheet_name]
-            df_to_use = main_df if sheet_name == 'SuperBowl Ads' else \
-                        theme_df if sheet_name == 'Theme Analysis' else \
-                        theme_summary
+            df_to_use = main_df if sheet_name == 'SuperBowl Ads' else theme_summary
             
             for idx, col in enumerate(df_to_use.columns):
                 max_length = max(
@@ -84,14 +95,6 @@ def convert_json_to_excel(input_file: str, output_file: str) -> None:
                 adjusted_width = min(max_length + 2, 100)
                 worksheet.column_dimensions[chr(65 + idx)].width = adjusted_width
 
-        # Create a pivot table
-        pivot_sheet = writer.book.create_sheet('Theme Pivot')
-        theme_df.to_excel(writer, sheet_name='Theme Pivot', startrow=0, startcol=0, index=False)
-        
-        # Add a sample pivot table
-        pivot_start_row = len(theme_df) + 3
-        pivot_sheet.cell(row=pivot_start_row, column=1, value="Sample Pivot Table Below:")
-        
 if __name__ == "__main__":
     convert_json_to_excel(
         'enhanced_superbowl_ads.json',
