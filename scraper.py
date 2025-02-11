@@ -8,6 +8,8 @@ from urllib.parse import urljoin
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import random
+import json
+import string
 
 class SuperBowlAdScraper:
     def __init__(self):
@@ -42,6 +44,57 @@ class SuperBowlAdScraper:
         session.mount("https://", adapter)
         session.headers.update(self.headers)
         return session
+
+    def clean_brand_name(self, brand: str, year: str) -> str:
+        """Clean brand name by removing year, punctuation and converting to uppercase."""
+        # Remove the year if present
+        brand = re.sub(rf'\b{year}\b', '', brand, flags=re.IGNORECASE)
+        
+        # Remove any text containing "Super Bowl" or variations
+        brand = re.sub(r'\b(?:Super\s*Bowl|SB|Bowl)\s*(?:[IVXLC]+|\d+)?\b', '', brand, flags=re.IGNORECASE)
+        
+        # Remove all punctuation except ampersand
+        translator = str.maketrans('', '', string.punctuation.replace('&', ''))
+        brand = brand.translate(translator)
+        
+        # Convert to uppercase and clean extra whitespace
+        brand = ' '.join(brand.upper().split())
+        
+        return brand
+
+    def extract_video_info(self, url: str) -> Dict[str, str]:
+        """Extract video URL and description from ad page."""
+        try:
+            soup = self.get_soup(url)
+            
+            # Try to find video URL
+            video_url = None
+            # Check for YouTube embed
+            youtube_frame = soup.find('iframe', src=lambda x: x and 'youtube.com' in x)
+            if youtube_frame:
+                video_url = youtube_frame.get('src', '')
+            else:
+                # Check for video links
+                video_links = soup.find_all('a', href=lambda x: x and any(vid in x.lower() for vid in ['youtube.com', 'vimeo.com']))
+                if video_links:
+                    video_url = video_links[0].get('href', '')
+            
+            # Try to find description
+            description = ''
+            content_div = soup.find('div', class_=['entry-content', 'post-content'])
+            if content_div:
+                # Get all paragraphs but exclude those that might be navigation or metadata
+                paragraphs = [p.get_text().strip() for p in content_div.find_all('p')
+                            if not any(x in p.get_text().lower() for x in ['previous post', 'next post', 'category'])]
+                description = ' '.join(paragraphs)
+            
+            return {
+                'video_url': video_url,
+                'description': description
+            }
+        except Exception as e:
+            print(f"Error extracting video info from {url}: {str(e)}")
+            return {'video_url': None, 'description': ''}
 
     def get_soup(self, url: str) -> BeautifulSoup:
         """Fetch a URL and return BeautifulSoup object."""
@@ -82,14 +135,24 @@ class SuperBowlAdScraper:
         try:
             soup = self.get_soup(url)
             
-            # Find all potential ad entries
-            ad_entries = soup.find_all(['h2', 'h3', 'h4']) + soup.find_all('div', class_='entry-title')
+            # Find all potential ad entries with their links
+            ad_entries = soup.find_all(['h2', 'h3', 'h4', 'div'], class_=['entry-title', 'post-title'])
             
             for entry in ad_entries:
+                # Get the link to the ad page
+                link_tag = entry.find('a', href=True) if entry.name != 'a' else entry
+                if not link_tag:
+                    continue
+                
                 text = entry.get_text().strip()
+                ad_url = urljoin(self.base_url, link_tag.get('href', ''))
                 
                 # Skip if text is too short or doesn't look like an ad title
                 if len(text) < 5 or text.isdigit():
+                    continue
+                
+                # Skip "Most Memorable Super Bowl Ads"
+                if text.lower().startswith('most memorable super bowl ads'):
                     continue
                 
                 # Try to extract brand and title
@@ -105,15 +168,22 @@ class SuperBowlAdScraper:
                     brand = ' '.join(words[:2])  # Assume first two words might be the brand
                     title = ' '.join(words[2:])
                 
-                # Clean up the data
-                brand = re.sub(r'\s+', ' ', brand).strip()
-                title = re.sub(r'\s+', ' ', title).strip()
+                # Clean up the brand name
+                brand = self.clean_brand_name(brand, year)
+                title = title.strip()
                 
                 if brand and title:
+                    # Get additional information from the ad page
+                    print(f"  Fetching details for {brand} ad...")
+                    video_info = self.extract_video_info(ad_url)
+                    
                     self.data.append({
                         'year': year,
                         'brand': brand,
-                        'title': title
+                        'title': title,
+                        'page_url': ad_url,
+                        'video_url': video_info['video_url'],
+                        'description': video_info['description']
                     })
             
         except Exception as e:
@@ -126,22 +196,32 @@ class SuperBowlAdScraper:
         """Main scraping method."""
         try:
             year_links = self.extract_year_links()
+            total_years = len(year_links)
             
-            for year_info in year_links:
+            for i, year_info in enumerate(year_links, 1):
                 try:
+                    print(f"\nProcessing year {year_info['year']} ({i}/{total_years})")
                     self.extract_ads_from_year_page(year_info['year'], year_info['url'])
                 except Exception as e:
                     print(f"Failed to scrape year {year_info['year']}: {str(e)}")
                     continue
             
-            # Convert to DataFrame and save to CSV
+            # Save to JSON
             if self.data:
-                df = pd.DataFrame(self.data)
-                df = df.drop_duplicates()
-                df.to_csv('superbowl_ads.csv', index=False)
-                print(f"Scraped {len(df)} ads and saved to superbowl_ads.csv")
+                # Remove duplicates while preserving order
+                seen = set()
+                unique_data = []
+                for item in self.data:
+                    key = (item['year'], item['brand'], item['title'])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_data.append(item)
+                
+                with open('superbowl_ads.json', 'w', encoding='utf-8') as f:
+                    json.dump(unique_data, f, indent=2, ensure_ascii=False)
+                print(f"\nScraped {len(unique_data)} ads and saved to superbowl_ads.json")
             else:
-                print("No data was collected. Please check the error messages above.")
+                print("\nNo data was collected. Please check the error messages above.")
         
         except Exception as e:
             print(f"Fatal error during scraping: {str(e)}")
