@@ -162,7 +162,11 @@ class SuperBowlAdScraper:
         try:
             soup = self.get_soup(url)
             
-            # Find all article items
+            # Remove sidebar content first
+            for sidebar in soup.find_all('div', class_='cactus-sidebar'):
+                sidebar.decompose()
+            
+            # Find all article items (excluding those that might be in sidebar)
             articles = soup.find_all('article', class_='cactus-post-item')
             
             for article in articles:
