@@ -62,6 +62,33 @@ class SuperBowlAdScraper:
         
         return brand
 
+    def clean_title(self, text: str, year: str) -> tuple[str, str]:
+        """Extract and clean brand and title from text."""
+        # Skip if contains superbowl-ads.com in title
+        if 'superbowl-ads.com' in text.lower():
+            return None, None
+            
+        # Remove the year if it's at the start of the text
+        text = re.sub(rf'^\s*{year}\s+', '', text, flags=re.IGNORECASE)
+        
+        # Try to extract brand and title using common patterns
+        # Pattern 1: "Brand Name - Ad Title"
+        # Pattern 2: "Brand Name: Ad Title"
+        parts = re.split(r'[-:]', text, maxsplit=1)
+        
+        if len(parts) > 1:
+            brand = parts[0].strip()
+            title = parts[1].strip()
+        else:
+            # If no clear separator, try to extract brand from the beginning
+            words = text.split()
+            if len(words) < 3:  # Need at least brand (1-2 words) and title (1+ words)
+                return None, None
+            brand = ' '.join(words[:2])  # Assume first two words might be the brand
+            title = ' '.join(words[2:])
+        
+        return brand, title
+
     def extract_video_info(self, url: str) -> Dict[str, str]:
         """Extract video URL and description from ad page."""
         try:
@@ -135,38 +162,35 @@ class SuperBowlAdScraper:
         try:
             soup = self.get_soup(url)
             
-            # Find all potential ad entries with their links
-            ad_entries = soup.find_all(['h2', 'h3', 'h4', 'div'], class_=['entry-title', 'post-title'])
+            # Find all article items
+            articles = soup.find_all('article', class_='cactus-post-item')
             
-            for entry in ad_entries:
+            for article in articles:
+                # Find the title element within the article
+                title_elem = article.find(['h2', 'h3', 'h4', 'div'], class_=['entry-title', 'post-title'])
+                if not title_elem:
+                    continue
+                
                 # Get the link to the ad page
-                link_tag = entry.find('a', href=True) if entry.name != 'a' else entry
+                link_tag = title_elem.find('a', href=True)
                 if not link_tag:
                     continue
                 
-                text = entry.get_text().strip()
+                text = title_elem.get_text().strip()
                 ad_url = urljoin(self.base_url, link_tag.get('href', ''))
                 
-                # Skip if text is too short or doesn't look like an ad title
-                if len(text) < 5 or text.isdigit():
+                # Skip if text is too short
+                if len(text) < 5:
                     continue
                 
                 # Skip "Most Memorable Super Bowl Ads"
                 if text.lower().startswith('most memorable super bowl ads'):
                     continue
                 
-                # Try to extract brand and title
-                # Common patterns: "Brand Name - Ad Title" or "Brand Name: Ad Title"
-                parts = re.split(r'[-:]', text, maxsplit=1)
-                
-                if len(parts) > 1:
-                    brand = parts[0].strip()
-                    title = parts[1].strip()
-                else:
-                    # If no clear separator, try to extract brand from the beginning
-                    words = text.split()
-                    brand = ' '.join(words[:2])  # Assume first two words might be the brand
-                    title = ' '.join(words[2:])
+                # Clean and extract brand and title
+                brand, title = self.clean_title(text, year)
+                if not brand or not title:
+                    continue
                 
                 # Clean up the brand name
                 brand = self.clean_brand_name(brand, year)
