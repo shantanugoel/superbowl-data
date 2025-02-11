@@ -53,8 +53,8 @@ class SuperBowlAdScraper:
         # Remove any text containing "Super Bowl" or variations
         brand = re.sub(r'\b(?:Super\s*Bowl|SB|Bowl)\s*(?:[IVXLC]+|\d+)?\b', '', brand, flags=re.IGNORECASE)
         
-        # Remove all punctuation except ampersand
-        translator = str.maketrans('', '', string.punctuation.replace('&', ''))
+        # Remove all punctuation except ampersand and hyphen
+        translator = str.maketrans('', '', string.punctuation.replace('&', '').replace('-', ''))
         brand = brand.translate(translator)
         
         # Convert to uppercase and clean extra whitespace
@@ -68,26 +68,54 @@ class SuperBowlAdScraper:
         if 'superbowl-ads.com' in text.lower():
             return None, None
             
-        # Remove the year if it's at the start of the text
-        text = re.sub(rf'^\s*{year}\s+', '', text, flags=re.IGNORECASE)
+        text = text.strip()
         
-        # Try to extract brand and title using common patterns
-        # Pattern 1: "Brand Name - Ad Title"
-        # Pattern 2: "Brand Name: Ad Title"
-        parts = re.split(r'[-:]', text, maxsplit=1)
+        # Format 1: <Brand> <Super Bowl> <Version> <Year> Ad - <Ad Title>
+        pattern1 = rf'(.*?)\s+(?:Super\s*Bowl|SB|Bowl)\s*(?:[IVXLC]+|\d+)?\s+{year}\s+Ad\s*[-–]?\s*(.+)$'
+        match = re.match(pattern1, text, re.IGNORECASE)
+        if match:
+            brand = match.group(1).strip()
+            title = match.group(2).strip()
+            return brand, title
+            
+        # Format 2: <Brand> <Year> <Super Bowl Ad> <Ad Title>
+        pattern2 = rf'(.*?)\s+{year}\s+(?:Super\s*Bowl|SB|Bowl).*?(?:Ad|Commercial)?\s*[-–]?\s*(.+)$'
+        match = re.match(pattern2, text, re.IGNORECASE)
+        if match:
+            brand = match.group(1).strip()
+            title = match.group(2).strip()
+            return brand, title
+            
+        # Format 3: <Year> <Brand> - <Ad title>
+        pattern3 = rf'^\s*{year}\s+(.+?)\s*[-–]\s*(.+)$'
+        match = re.match(pattern3, text)
+        if match:
+            brand = match.group(1).strip()
+            title = match.group(2).strip()
+            return brand, title
+            
+        # If no pattern matches, try splitting on common separators
+        for separator in [' Ad -', ' Ad –', ' - ', ' – ']:
+            if separator in text:
+                parts = text.split(separator)
+                if len(parts) >= 2:
+                    brand_part = parts[0].strip()
+                    title = parts[-1].strip()
+                    
+                    # Remove Super Bowl and variations from brand part
+                    brand_part = re.sub(r'\b(?:Super\s*Bowl|SB|Bowl)\s*(?:[IVXLC]+|\d+)?\b', '', brand_part, flags=re.IGNORECASE)
+                    # Remove year from brand part
+                    brand_part = re.sub(rf'\b{year}\b', '', brand_part, flags=re.IGNORECASE)
+                    # Remove "Ad" or "Commercial" from brand part
+                    brand_part = re.sub(r'\b(?:Ad|Commercial)\b', '', brand_part, flags=re.IGNORECASE)
+                    
+                    # Clean up brand part while preserving hyphens in brand names
+                    brand = ' '.join(brand_part.split())
+                    
+                    if brand and title:
+                        return brand, title
         
-        if len(parts) > 1:
-            brand = parts[0].strip()
-            title = parts[1].strip()
-        else:
-            # If no clear separator, try to extract brand from the beginning
-            words = text.split()
-            if len(words) < 3:  # Need at least brand (1-2 words) and title (1+ words)
-                return None, None
-            brand = ' '.join(words[:2])  # Assume first two words might be the brand
-            title = ' '.join(words[2:])
-        
-        return brand, title
+        return None, None
 
     def extract_video_info(self, url: str) -> Dict[str, str]:
         """Extract video URL and description from ad page."""
@@ -209,6 +237,7 @@ class SuperBowlAdScraper:
                         'year': year,
                         'brand': brand,
                         'title': title,
+                        'original_title': text,  # Save the original title
                         'page_url': ad_url,
                         'video_url': video_info['video_url'],
                         'description': video_info['description']
