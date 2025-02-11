@@ -11,11 +11,11 @@ if not GOOGLE_API_KEY:
     raise ValueError("Please set GOOGLE_API_KEY environment variable")
 
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 def create_gemini_prompt(ad_data: Dict[str, Any]) -> str:
     """Create a prompt for Gemini based on the ad data."""
-    return f"""Analyze this Super Bowl advertisement:
+    prompt = f"""Analyze this Super Bowl advertisement and provide a JSON response:
 
 Title: {ad_data['title']}
 Brand: {ad_data['brand']}
@@ -23,17 +23,27 @@ Year: {ad_data['year']}
 Original Title: {ad_data['original_title']}
 Description: {ad_data['description']}
 
-Please provide the following in a JSON format:
+Based on the above information, create a JSON response with exactly these three fields:
 1. A concise summary of the ad in 100 words or less
-2. The primary product/industry category (use a consistent category from this list: Automotive, Food & Beverage, Technology, Entertainment, Financial Services, Retail, Telecommunications, Consumer Goods, Healthcare, Travel, Sports & Fitness, or Other)
-3. Exactly 3 theme tags from this predefined set: Humor, Celebrity, Emotional, Action, Family, Animals, Innovation, Nostalgia, Music, Sports, Suspense, Social Message, Patriotic, Cinematic, Fantasy
+2. The primary product/industry category (choose one: Automotive, Food & Beverage, Technology, Entertainment, Financial Services, Retail, Telecommunications, Consumer Goods, Healthcare, Travel, Sports & Fitness, Other)
+3. Exactly 3 theme tags (choose from: Humor, Celebrity, Emotional, Action, Family, Animals, Innovation, Nostalgia, Music, Sports, Suspense, Social Message, Patriotic, Cinematic, Fantasy)
 
-Format your response as valid JSON with these exact keys:
-{
-    "summary": "your summary here",
-    "category": "category here",
-    "theme_tags": ["tag1", "tag2", "tag3"]
-}"""
+Respond ONLY with a valid JSON object in this exact format, no other text:
+{{"summary": "your 100-word summary here", "category": "chosen category here", "theme_tags": ["tag1", "tag2", "tag3"]}}"""
+    return prompt
+
+def extract_json_from_response(text: str) -> Dict[str, Any]:
+    """Extract JSON from Gemini response text."""
+    try:
+        # Try to find JSON-like content between curly braces
+        start = text.find('{')
+        end = text.rfind('}') + 1
+        if start != -1 and end != 0:
+            json_str = text[start:end]
+            return json.loads(json_str)
+        raise ValueError("No JSON content found in response")
+    except Exception as e:
+        raise ValueError(f"Failed to parse JSON: {str(e)}")
 
 def process_with_gemini(ad_data: Dict[str, Any]) -> Dict[str, Any]:
     """Process a single ad with Gemini API and handle retries."""
@@ -41,21 +51,41 @@ def process_with_gemini(ad_data: Dict[str, Any]) -> Dict[str, Any]:
     for attempt in range(max_retries):
         try:
             response = model.generate_content(create_gemini_prompt(ad_data))
-            # Parse the JSON response
-            gemini_data = json.loads(response.text)
+            
+            # Extract and parse the JSON response
+            gemini_data = extract_json_from_response(response.text)
             
             # Validate the response format
             required_keys = {'summary', 'category', 'theme_tags'}
             if not all(key in gemini_data for key in required_keys):
                 raise ValueError("Missing required keys in Gemini response")
-            if len(gemini_data['theme_tags']) != 3:
+            if not isinstance(gemini_data['theme_tags'], list) or len(gemini_data['theme_tags']) != 3:
                 raise ValueError("Theme tags must be exactly 3")
+            
+            # Validate category
+            valid_categories = {
+                'Automotive', 'Food & Beverage', 'Technology', 'Entertainment',
+                'Financial Services', 'Retail', 'Telecommunications', 'Consumer Goods',
+                'Healthcare', 'Travel', 'Sports & Fitness', 'Other'
+            }
+            if gemini_data['category'] not in valid_categories:
+                raise ValueError(f"Invalid category: {gemini_data['category']}")
+            
+            # Validate theme tags
+            valid_tags = {
+                'Humor', 'Celebrity', 'Emotional', 'Action', 'Family', 'Animals',
+                'Innovation', 'Nostalgia', 'Music', 'Sports', 'Suspense',
+                'Social Message', 'Patriotic', 'Cinematic', 'Fantasy'
+            }
+            if not all(tag in valid_tags for tag in gemini_data['theme_tags']):
+                raise ValueError("Invalid theme tags")
             
             return gemini_data
             
         except Exception as e:
             if attempt == max_retries - 1:
-                print(f"Failed to process ad {ad_data['title']} after {max_retries} attempts: {str(e)}")
+                print(f"\nFailed to process ad: {ad_data['title']}")
+                print(f"Error: {str(e)}")
                 return {
                     'summary': ad_data.get('description', ''),
                     'category': 'Other',
