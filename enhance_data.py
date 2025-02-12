@@ -16,7 +16,11 @@ model = genai.GenerativeModel('gemini-1.5-flash')
 
 def create_gemini_prompt(ad_data: Dict[str, Any]) -> str:
     """Create a prompt for Gemini based on the ad data."""
-    prompt = f"""Analyze this Super Bowl advertisement and provide a JSON response:
+    video_info = ""
+    if ad_data.get('video_url'):
+        video_info = f"\nVideo URL: {ad_data['video_url']}\nPlease watch this video and base your analysis primarily on the video content."
+    
+    prompt = f"""Analyze this Super Bowl advertisement and provide a JSON response:{video_info}
 
 Title: {ad_data['title']}
 Brand: {ad_data['brand']}
@@ -24,8 +28,8 @@ Year: {ad_data['year']}
 Original Title: {ad_data['original_title']}
 Description: {ad_data['description']}
 
-Based on the above information, create a JSON response with exactly these three fields:
-1. A concise summary of the ad in 100 words or less
+Based on the above information and the video content (if available), create a JSON response with exactly these three fields:
+1. A concise summary of the ad in 100 words or less (focus on describing what actually happens in the video if available)
 2. The primary product/industry category (choose one: Automotive, Food & Beverage, Technology, Entertainment, Financial Services, Retail, Telecommunications, Consumer Goods, Healthcare, Travel, Sports & Fitness, Other)
 3. Exactly 3 theme tags (choose from: Humor, Celebrity, Emotional, Action, Family, Animals, Innovation, Nostalgia, Music, Sports, Suspense, Social Message, Patriotic, Cinematic, Fantasy)
 
@@ -49,6 +53,15 @@ def extract_json_from_response(text: str) -> Dict[str, Any]:
 def process_with_gemini(ad_data: Dict[str, Any]) -> Dict[str, Any]:
     """Process a single ad with Gemini API and handle retries."""
     max_retries = 3
+    
+    # Clean up video URL if present
+    if ad_data.get('video_url'):
+        # Convert embed URLs to watch URLs for better Gemini processing
+        video_url = ad_data['video_url']
+        if 'youtube.com/embed/' in video_url:
+            video_id = video_url.split('/embed/')[-1].split('?')[0]
+            ad_data['video_url'] = f'https://www.youtube.com/watch?v={video_id}'
+    
     for attempt in range(max_retries):
         try:
             response = model.generate_content(create_gemini_prompt(ad_data))
